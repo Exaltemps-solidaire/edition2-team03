@@ -1,6 +1,27 @@
+name: ${APP}
+
+networks:
+  core-network:
+    external: true
+
 services:
+
   frontend:
-    image: nginx:alpine
-    volumes:
-      - ./index.html:/usr/share/nginx/html/index.html:ro
-    ports: ["8080:80"]
+    image: localhost:5000/${APP}/frontend:dev
+    container_name: ${APP}-frontend
+    restart: unless-stopped
+    networks: [core-network]
+    ports:
+      - "8080:80"
+
+  api:
+    image: localhost:5000/${APP}/api:dev
+    container_name: ${APP}-api
+    restart: unless-stopped
+    networks: [core-network]
+    environment:
+      VAULT_ADDR: http://openbao.internal:8200
+      VAULT_TOKEN: root-dev-token
+      VAULT_PATH: secret/${APP}/postgres
+    ports:
+      - "8081:8081"

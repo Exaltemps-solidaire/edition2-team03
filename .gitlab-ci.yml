@@ -1,0 +1,101 @@
+stages:
+  - app-provision
+  - app-build
+  - app-image
+  - app-deploy
+  - app-verify
+  - app-stop
+  - app-purge
+
+variables:
+  APP: team03
+  TAG: dev
+  REGISTRY: localhost:5000
+  PUBLIC_BUCKET: "0"
+  ACTION: start
+
+.on-start:
+  rules:
+    - if: $ACTION == "start"
+
+.podman-image:
+  extends: .on-start
+  stage: app-image
+  script:
+    - podman build -t "$REGISTRY/$APP/$SERVICE:$TAG" "$SERVICE/"
+    - podman push   "$REGISTRY/$APP/$SERVICE:$TAG"
+
+provision:
+  extends: .on-start
+  stage: app-provision
+  script:
+    - APP="$APP" PUBLIC_BUCKET="$PUBLIC_BUCKET" ./bootstrap.sh
+
+build-frontend:
+  extends: .on-start
+  stage: app-build
+  script:
+    - cd frontend
+    - bun install
+    - bun run build
+
+build-api:
+  extends: .on-start
+  stage: app-build
+  script:
+    - cd api
+    - bun install --production
+
+image-frontend:
+  extends: .podman-image
+  variables: { SERVICE: frontend }
+
+image-api:
+  extends: .podman-image
+  variables: { SERVICE: api }
+
+deploy:
+  extends: .on-start
+  stage: app-deploy
+  script:
+    - echo "[deploy] podman compose -p $APP up -d --force-recreate"
+    - podman compose -p "$APP" up -d --force-recreate
+
+verify:
+  extends: .on-start
+  stage: app-verify
+  script:
+    - |
+      set -e
+      echo "[verify] smoke test app"
+      ok=0
+      for _ in $(seq 1 30); do
+        if curl -sf http://localhost:8081/health >/dev/null && curl -sf http://localhost:8080/ >/dev/null; then
+          ok=1; break
+        fi
+        sleep 1
+      done
+      if [ "$ok" != "1" ]; then
+        echo "[verify] FAIL — services not reachable after 30s"
+        exit 1
+      fi
+      echo "  OK  api      http://localhost:8081/health"
+      echo "  OK  frontend http://localhost:8080"
+
+stop:
+  stage: app-stop
+  rules:
+    - if: $ACTION == "stop"
+  script:
+    - echo "[stop] podman compose -p $APP down"
+    - podman compose -p "$APP" down
+
+purge:
+  stage: app-purge
+  rules:
+    - if: $ACTION == "purge"
+  script:
+    - echo "[purge] podman compose -p $APP down --volumes"
+    - podman compose -p "$APP" down --volumes
+    - echo "[purge] removing the Vault secrets of $APP"
+    - vault kv metadata delete "secret/$APP/postgres" 2>/dev/null || true
